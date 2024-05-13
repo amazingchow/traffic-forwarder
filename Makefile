@@ -36,7 +36,17 @@ clean: ## Clean all executable objects.
 local_run:
 	@(./traffic-forwarder -f $(PWD)/etc/traffic-forwarder.conf)
 
-.PHONY: run
-run:
-	@(rm -rf nohup.out)
-	@(nohup ./traffic-forwarder -f $(PWD)/etc/traffic-forwarder.conf &)
+.PHONY: start
+start:
+	# To install goreman, run `go install github.com/mattn/goreman@latest`
+	@(echo "proc1: $(PWD)/traffic-forwarder -f $(PWD)/etc/traffic-forwarder.conf" > Procfile)
+	@(goreman check)
+	@(goreman run start)
+
+.PHONY: stop
+stop:
+	@(goreman run stop-all)
+
+.PHONY: status
+status:
+	@(goreman run status)
