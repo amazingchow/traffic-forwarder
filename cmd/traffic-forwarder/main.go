@@ -17,18 +17,18 @@ import (
 )
 
 var (
-	_ConfigFile = flag.String("f", "./etc/traffic-forwarder.conf", "the setting file")
+	_ConfigFile = flag.String("conf", "./etc/traffic-forwarder.conf", "The path of the configuration file.")
 )
 
-func runTrafficForwarder(fConf string) bool {
-	logrus.Infof("Ready to load setting file:%s.", fConf)
-
-	fin, err := os.Open(fConf)
+func RunTrafficForwarder(configFile string) bool {
+	logrus.Infof("Loading setting file:%s.", configFile)
+	fin, err := os.Open(configFile)
 	if err != nil {
-		logrus.WithError(err).Errorf("Failed to load setting file:%s.", fConf)
+		logrus.WithError(err).Errorf("Failed to load setting file:%s.", configFile)
 		return false
 	}
 	defer fin.Close()
+	logrus.Infof("Opened setting file:%s.", configFile)
 
 	scanner := bufio.NewScanner(fin)
 	scanner.Split(bufio.ScanLines)
@@ -42,16 +42,21 @@ func runTrafficForwarder(fConf string) bool {
 			logrus.Infof("Skip comment line:%s.", line)
 			continue
 		}
-		setting := strings.Split(line, " ")
+		setting := strings.Split(line, "|")
 		if len(setting) != 3 {
-			logrus.Infof("Skip invalid line:%s.", line)
+			logrus.Infof("Skip invalid setting:%s.", line)
 			continue
 		}
 		logrus.Infof("Use line:'%s' to setup forwarding tunnel.", line)
 
-		localPort, _ := strconv.Atoi(setting[0])
-		remoteHost := setting[1]
-		remotePort, _ := strconv.Atoi(setting[2])
+		localPort, _ := strconv.Atoi(strings.TrimSpace(setting[0]))
+		remoteHost := strings.TrimSpace(setting[1])
+		remotePort, _ := strconv.Atoi(strings.TrimSpace(setting[2]))
+		if localPort <= 0 || remotePort <= 0 {
+			logrus.Infof("Skip invalid setting:%s.", line)
+			continue
+		}
+
 		go func(lp int, rh string, rp int) {
 			ln, err := net.Listen("tcp", fmt.Sprintf("[::]:%d", lp))
 			if err != nil {
@@ -67,27 +72,28 @@ func runTrafficForwarder(fConf string) bool {
 					continue
 				}
 				remote := upstream.RemoteAddr().String()
-				logrus.Infof("Remote %s connected on [::]:%d.", remote, lp)
+				logrus.Infof("Client<ip:%s> connected on [::]:%d.", remote, lp)
 
 				downstream, err := net.Dial("tcp", fmt.Sprintf("%s:%d", rh, rp))
 				if err != nil {
-					logrus.WithError(err).Errorf("Failed to listen on %s:%d.", rh, rp)
+					logrus.WithError(err).Errorf("Failed to connect to %s:%d for client<ip:%s>.", rh, rp, remote)
 					upstream.Close()
 					continue
 				}
 
-				logrus.Infof("Forwarding traffic from 0.0.0.0:%d to %s:%d for remote:%s.", lp, rh, rp, upstream.RemoteAddr().String())
-				go Transfer(upstream, downstream)
+				logrus.Infof("Forwarding traffic from 0.0.0.0:%d to %s:%d for client<ip:%s>.", lp, rh, rp, remote)
+				// Transfer data from client to remote server.
 				go Transfer(downstream, upstream)
+				// Transfer data from remote server to client.
+				go Transfer(upstream, downstream)
 			}
 		}(localPort, remoteHost, remotePort)
 	}
 	if err = scanner.Err(); err != nil {
-		logrus.WithError(err).Errorf("Failed to load setting file:%s.", *_ConfigFile)
+		logrus.WithError(err).Errorf("Failed to continue to load setting file:%s.", *_ConfigFile)
 		return false
 	}
 
-	logrus.Infof("Loaded setting file:%s.", *_ConfigFile)
 	return true
 }
 
@@ -95,13 +101,18 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 	flag.Parse()
 
-	if runTrafficForwarder(*_ConfigFile) {
-		logrus.Info("## Start Service")
+	if *_ConfigFile == "" {
+		logrus.Error("Invalid configuration file.")
+		return
+	}
+
+	if RunTrafficForwarder(*_ConfigFile) {
+		logrus.Info("Service started.")
 		signalCh := make(chan os.Signal, 1)
 		signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 		<-signalCh
-		logrus.Info("## Stop Service")
+		logrus.Warning("Service stopped.")
 	} else {
-		logrus.Error("## CANNOT Start Service")
+		logrus.Error("Failed to start service.")
 	}
 }

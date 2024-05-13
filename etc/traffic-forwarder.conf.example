@@ -1,2 +1,2 @@
-# proxy port | source host | source port
-# 18080 127.0.0.1 8080
+# local port | remote host | remote port
+# 18080 | 127.0.0.1 | 8080

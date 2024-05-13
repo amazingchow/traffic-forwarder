@@ -34,12 +34,12 @@ clean: ## Clean all executable objects.
 
 .PHONY: local_run
 local_run: build ## Run the application locally.
-	@(./traffic-forwarder -f $(PWD)/etc/traffic-forwarder.conf)
+	@(./traffic-forwarder -conf $(PWD)/etc/traffic-forwarder.conf)
 
 .PHONY: start
 start: build ## Start the application using goreman.
 	# To install goreman, run `go install github.com/mattn/goreman@latest`
-	@(echo "proc1: $(PWD)/traffic-forwarder -f $(PWD)/etc/traffic-forwarder.conf" > Procfile)
+	@(echo "proc1: $(PWD)/traffic-forwarder -conf $(PWD)/etc/traffic-forwarder.conf" > Procfile)
 	@(goreman check)
 	@(nohup goreman start &)
 
