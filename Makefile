@@ -20,7 +20,7 @@ ifeq ($(gc_debug), 1)
 endif
 
 .PHONY: build
-build: clean $(ALL_TARGETS) ## Compile the overall project, and output some executable objects.
+build: clean $(ALL_TARGETS) ## Build all executable objects.
 
 $(TARGETS): $(SRC)
 	@(GOOS=linux GOARCH=amd64 go build -mod vendor $(BUILD_FLAGS) $(PWD)/cmd/$@)
@@ -33,20 +33,20 @@ clean: ## Clean all executable objects.
 	@(rm -f $(ALL_TARGETS))
 
 .PHONY: local_run
-local_run:
+local_run: build ## Run the application locally.
 	@(./traffic-forwarder -f $(PWD)/etc/traffic-forwarder.conf)
 
 .PHONY: start
-start:
+start: build ## Start the application using goreman.
 	# To install goreman, run `go install github.com/mattn/goreman@latest`
 	@(echo "proc1: $(PWD)/traffic-forwarder -f $(PWD)/etc/traffic-forwarder.conf" > Procfile)
 	@(goreman check)
 	@(goreman run start)
 
 .PHONY: stop
-stop:
+stop: ## Stop the application using goreman.
 	@(goreman run stop-all)
 
 .PHONY: status
-status:
+status: ## Show the status of the application using goreman.
 	@(goreman run status)
