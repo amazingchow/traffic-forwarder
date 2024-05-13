@@ -41,7 +41,7 @@ start: build ## Start the application using goreman.
 	# To install goreman, run `go install github.com/mattn/goreman@latest`
 	@(echo "proc1: $(PWD)/traffic-forwarder -f $(PWD)/etc/traffic-forwarder.conf" > Procfile)
 	@(goreman check)
-	@(goreman run start)
+	@(nohup goreman start &)
 
 .PHONY: stop
 stop: ## Stop the application using goreman.
