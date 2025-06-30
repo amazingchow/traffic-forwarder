@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"os"
 	"os/signal"
@@ -67,8 +66,8 @@ func (cm *ConnectionManager) RemoveConnection(conn net.Conn) {
 
 	if _, exists := cm.conns[conn]; exists {
 		delete(cm.conns, conn)
-		cm.wg.Done()
 		conn.Close()
+		cm.wg.Done()
 	}
 }
 
@@ -80,6 +79,7 @@ func (cm *ConnectionManager) CloseAll() {
 
 	for conn := range cm.conns {
 		conn.Close()
+		cm.wg.Done()
 	}
 	cm.conns = make(map[net.Conn]struct{})
 }
@@ -108,7 +108,6 @@ func RunTrafficForwarder(configFile string) bool {
 		return false
 	}
 	defer fin.Close()
-	logrus.Infof("Opened setting file:%s.", configFile)
 
 	var rules []ForwardingRule
 	scanner := bufio.NewScanner(fin)
@@ -116,11 +115,9 @@ func RunTrafficForwarder(configFile string) bool {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if len(line) == 0 {
-			logrus.Debug("Skip blank line.")
 			continue
 		}
 		if ok := strings.HasPrefix(line, "#"); ok {
-			logrus.Debugf("Skip comment line:%s.", line)
 			continue
 		}
 		setting := strings.Split(line, "|")
@@ -128,7 +125,6 @@ func RunTrafficForwarder(configFile string) bool {
 			logrus.Warnf("Skip invalid setting:%s.", line)
 			continue
 		}
-		logrus.Infof("Use line:'%s' to setup forwarding tunnel.", line)
 
 		localPort, _ := strconv.Atoi(strings.TrimSpace(setting[0]))
 		remoteHost := strings.TrimSpace(setting[1])
@@ -138,13 +134,13 @@ func RunTrafficForwarder(configFile string) bool {
 			continue
 		}
 
+		logrus.Infof("Use line:'%s' to setup forwarding tunnel.", line)
 		rules = append(rules, ForwardingRule{
 			LocalPort:  localPort,
 			RemoteHost: remoteHost,
 			RemotePort: remotePort,
 		})
 	}
-
 	if err = scanner.Err(); err != nil {
 		logrus.WithError(err).Errorf("Failed to continue to load setting file:%s.", *_ConfigFile)
 		return false
@@ -152,19 +148,31 @@ func RunTrafficForwarder(configFile string) bool {
 
 	// 启动所有转发规则
 	var wg sync.WaitGroup
+	started := make(chan struct{}, len(rules))
+
 	for _, rule := range rules {
 		wg.Add(1)
 		go func(r ForwardingRule) {
 			defer wg.Done()
-			startForwarding(r)
+			startForwarding(r, started)
 		}(rule)
 	}
+
+	// 等待所有转发服务启动完成
+	wg.Wait()
+	close(started)
+
+	// 等待上下文取消，确保所有goroutine都能正确退出
+	go func() {
+		<-globalConnManager.ctx.Done()
+		logrus.Info("Shutdown signal received, stopping all forwarding services.")
+	}()
 
 	return true
 }
 
 // startForwarding 启动单个转发服务
-func startForwarding(rule ForwardingRule) {
+func startForwarding(rule ForwardingRule, started chan struct{}) {
 	ln, err := net.Listen("tcp", fmt.Sprintf("[::]:%d", rule.LocalPort))
 	if err != nil {
 		logrus.WithError(err).Errorf("Failed to listen on [::]:%d.", rule.LocalPort)
@@ -172,6 +180,15 @@ func startForwarding(rule ForwardingRule) {
 	}
 	defer ln.Close()
 	logrus.Infof("Listening on [::]:%d.", rule.LocalPort)
+
+	// 发送启动完成信号
+	started <- struct{}{}
+
+	// 创建一个goroutine来监听上下文取消，用于优雅关闭监听器
+	go func() {
+		<-globalConnManager.ctx.Done()
+		ln.Close()
+	}()
 
 	for {
 		upstream, err := ln.Accept()
@@ -220,7 +237,7 @@ func handleConnection(upstream net.Conn, rule ForwardingRule) {
 	// 设置下游连接超时
 	downstream.SetDeadline(time.Now().Add(*_Timeout))
 
-	// 添加到连接管理器
+	// 添加到连接管理器 - 修复：只有在连接成功后才添加
 	globalConnManager.AddConnection(downstream)
 	defer globalConnManager.RemoveConnection(downstream)
 
@@ -231,19 +248,32 @@ func handleConnection(upstream net.Conn, rule ForwardingRule) {
 	ctx, cancel := context.WithCancel(globalConnManager.ctx)
 	defer cancel()
 
-	// 使用改进的传输函数
+	// 使用改进的传输函数 - 修复：使用sync.WaitGroup确保两个goroutine都完成
+	var wg sync.WaitGroup
+	wg.Add(2)
+
 	go func() {
+		defer wg.Done()
 		defer cancel()
 		TransferWithContext(ctx, downstream, upstream)
 	}()
 
 	go func() {
+		defer wg.Done()
 		defer cancel()
 		TransferWithContext(ctx, upstream, downstream)
 	}()
 
 	// 等待传输完成或上下文取消
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+		// 上下文被取消，等待goroutine完成
+		wg.Wait()
+	case <-time.After(*_Timeout):
+		// 超时保护，避免goroutine泄漏
+		cancel()
+		wg.Wait()
+	}
 }
 
 // TransferWithContext 带上下文的传输函数
@@ -285,11 +315,18 @@ func TransferWithContext(ctx context.Context, dst io.Writer, src io.Reader) {
 }
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
 	flag.Parse()
 
 	if *_ConfigFile == "" {
-		logrus.Error("Invalid configuration file.")
+		logrus.Error("No configuration file provided.")
+		return
+	}
+	if *_MaxConns <= 0 {
+		logrus.Error("Invalid maximum concurrent connections.")
+		return
+	}
+	if *_MaxConns > 4096 {
+		logrus.Error("Maximum concurrent connections is too large.")
 		return
 	}
 
@@ -304,9 +341,19 @@ func main() {
 		<-signalCh
 		logrus.Warning("Service stopped.")
 
-		// 等待所有连接优雅关闭
-		globalConnManager.Wait()
-		logrus.Info("All connections closed.")
+		// 等待所有连接优雅关闭，添加超时保护
+		done := make(chan struct{})
+		go func() {
+			globalConnManager.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			logrus.Info("All connections closed gracefully.")
+		case <-time.After(10 * time.Second):
+			logrus.Warning("Timeout waiting for connections to close, forcing shutdown.")
+		}
 	} else {
 		logrus.Error("Failed to start service.")
 	}

@@ -1,15 +1,14 @@
 #!/bin/bash
 
 # 内存监控脚本
-# 用于监控 traffic-forwarder 的内存使用情况
 
 set -e
 
 # 配置
 PROCESS_NAME="traffic-forwarder"
 LOG_FILE="/tmp/traffic-forwarder-monitor.log"
-ALERT_THRESHOLD_MB=500  # 内存使用超过500MB时告警
-CHECK_INTERVAL=30       # 检查间隔（秒）
+ALERT_THRESHOLD_MB=50 # 内存使用超过50MB时告警
+CHECK_INTERVAL=60 # 检查间隔（秒）
 
 # 颜色定义
 RED='\033[0;31m'
@@ -151,10 +150,6 @@ show_help() {
     echo "  cleanup    清理监控日志"
     echo "  help       显示此帮助信息"
     echo ""
-    echo "示例:"
-    echo "  $0 monitor    # 启动监控"
-    echo "  $0 profile    # 显示性能信息"
-    echo "  $0 cleanup    # 清理日志"
 }
 
 # 主函数

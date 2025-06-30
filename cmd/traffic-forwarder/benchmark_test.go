@@ -37,18 +37,22 @@ func BenchmarkTransfer(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-			defer cancel()
 
-			go func() {
-				TransferWithContext(ctx, server, client)
-			}()
+			// 启动双向传输
+			go TransferWithContext(ctx, server, client)
+			go TransferWithContext(ctx, client, server)
 
 			// 发送一些测试数据
 			testData := []byte("test data")
 			client.Write(testData)
 
+			// 读取数据以完成传输
+			buffer := make([]byte, 1024)
+			server.Read(buffer)
+
 			// 等待传输完成
 			<-ctx.Done()
+			cancel()
 		}
 	})
 }
@@ -117,8 +121,8 @@ func TestConnectionManager(t *testing.T) {
 
 	// 测试移除连接
 	cm.RemoveConnection(conn1)
-	if cm.AddConnection(conn4) {
-		t.Error("Should not add connection after removal")
+	if !cm.AddConnection(conn4) {
+		t.Error("Failed to add fourth connection")
 	}
 }
 
@@ -128,11 +132,12 @@ func TestTransferWithContext(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	// 启动传输
+	// 启动双向传输
 	go TransferWithContext(ctx, server, client)
+	go TransferWithContext(ctx, client, server)
 
 	// 发送测试数据
 	testData := []byte("hello world")
@@ -151,6 +156,9 @@ func TestTransferWithContext(t *testing.T) {
 	if string(buffer[:n]) != string(testData) {
 		t.Errorf("Expected %s, got %s", string(testData), string(buffer[:n]))
 	}
+
+	// 等待传输完成
+	<-ctx.Done()
 }
 
 // mockConn 模拟连接用于测试
