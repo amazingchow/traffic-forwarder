@@ -18,3 +18,6 @@ etc/*.conf
 .env.local
 /traffic-forwarder
 Procfile
+.DS_Store
+.idea
+.vscode
